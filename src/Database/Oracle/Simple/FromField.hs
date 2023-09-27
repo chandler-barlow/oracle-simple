@@ -1,7 +1,7 @@
-{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -10,14 +10,19 @@
 module Database.Oracle.Simple.FromField where
 
 import Control.Monad
+import qualified Data.ByteString.Char8 as B
 import Data.Coerce
 import Data.Fixed
+import Data.Functor ((<&>))
 import Data.Int
+import qualified Data.List as L
+import Data.Maybe (fromMaybe)
 import Data.Proxy
 import Data.Text
 import Data.Time
 import Data.Word
 import Database.Oracle.Simple.Internal
+import Foreign (peekArray)
 import Foreign.C.String
 import Foreign.C.Types
 import Foreign.Ptr
@@ -29,7 +34,7 @@ class (HasDPINativeType a) => FromField a where
   fromField :: FieldParser a
 
 instance Functor FieldParser where
-  fmap f FieldParser{..} = FieldParser (fmap f <$> readDPIDataBuffer)
+  fmap f FieldParser {..} = FieldParser (fmap f <$> readDPIDataBuffer)
 
 instance FromField Double where
   fromField = FieldParser getDouble
@@ -70,19 +75,17 @@ instance FromField UTCTime where
 
 dpiTimeStampToUTCTime :: DPITimestamp -> UTCTime
 dpiTimeStampToUTCTime dpi =
-  let
-    DPITimestamp {..} = dpiTimeStampToUTCDPITimeStamp dpi
-    local = LocalTime d tod
-    d = fromGregorian (fromIntegral year) (fromIntegral month) (fromIntegral day)
-    tod = TimeOfDay (fromIntegral hour) (fromIntegral minute) (fromIntegral second + picos)
-    picos = MkFixed (fromIntegral fsecond * 1000) :: Pico
-  in
-    localTimeToUTC utc local
+  let DPITimestamp {..} = dpiTimeStampToUTCDPITimeStamp dpi
+      local = LocalTime d tod
+      d = fromGregorian (fromIntegral year) (fromIntegral month) (fromIntegral day)
+      tod = TimeOfDay (fromIntegral hour) (fromIntegral minute) (fromIntegral second + picos)
+      picos = MkFixed (fromIntegral fsecond * 1000) :: Pico
+   in localTimeToUTC utc local
 
 -- | Encapsulates all information needed to parse a field as a Haskell value.
 newtype FieldParser a = FieldParser
-  { readDPIDataBuffer :: ReadDPIBuffer a
-  -- ^ A function that retrieves a value of type @a@ from the DPI data buffer.
+  { -- | A function that retrieves a value of type @a@ from the DPI data buffer.
+    readDPIDataBuffer :: ReadDPIBuffer a
   }
 
 instance Applicative FieldParser where
@@ -129,10 +132,93 @@ getText = fmap pack <$> getString
 -- | Get String from the data buffer
 getString :: ReadDPIBuffer String
 getString = buildString <=< peek <=< dpiData_getBytes
- where
-  buildString DPIBytes{..} =
-    peekCStringLen (dpiBytesPtr, fromIntegral dpiBytesLength)
+  where
+    buildString DPIBytes {..} =
+      peekCStringLen (dpiBytesPtr, fromIntegral dpiBytesLength)
 
 -- | Get a `DPITimestamp` from the buffer
 getTimestamp :: ReadDPIBuffer DPITimestamp
 getTimestamp = peek <=< dpiData_getTimestamp
+
+---- Json Stuff ----
+-- The main function for dealing with json
+getJson :: ReadDPIBuffer DpiJsonNode
+getJson = peek <=< dpiData_getJson
+
+-- if the node type is json array use this
+getJsonArray :: ReadDPIBuffer DpiJsonArray
+getJsonArray = peek <=< dpiData_getJsonArray
+
+-- if the node type is json object use this
+getJsonObject :: ReadDPIBuffer DpiJsonObject
+getJsonObject = peek <=< dpiData_getJsonObject
+
+instance FromField DpiJsonNode where
+  fromField = FieldParser getJson
+
+instance FromField DpiJsonObject where
+  fromField = FieldParser getJsonObject
+
+instance FromField DpiJsonArray where
+  fromField = FieldParser getJsonArray
+
+instance FromField JsonByteString where
+  fromField = B.pack . show . dpiJsonNodeToJNode <$> FieldParser getJson
+
+type JsonByteString = ByteString
+
+-- Defaults to a null value for unparseble json types
+-- may not be good behaviour
+dpiJsonNodeToJNode :: DpiJsonNode -> IO JNode
+dpiJsonNodeToJNode DpiJsonNode {..} = do
+  let ntype = fromMaybe DPI_NATIVE_TYPE_NULL (uintToDPINativeType nodeNativeTypeNum)
+  toJNode ntype nodeValue
+
+dpiJsonObjectToJNode :: DpiJsonObject -> IO JNode
+dpiJsonObjectToJNode DpiJsonObject {..} = do
+  let n = fromIntegral objNumFields
+  fieldNames <- mapM peekCString =<< peekArray n objFieldNames
+  fields <- mapM dpiJsonNodeToJNode =<< peekArray n objFields
+  return $ JObject (L.zip fieldNames fields)
+
+dpiJsonArrayToJNode :: DpiJsonArray -> IO JNode
+dpiJsonArrayToJNode DpiJsonArray {..} = do
+  let n = fromIntegral arrNumElements
+  xs <- mapM dpiJsonNodeToJNode =<< peekArray n arrElements
+  return $ JArray xs
+
+toJNode :: DPINativeType -> Ptr (DPIData ReadBuffer) -> IO JNode
+toJNode ntype b = case ntype of
+  DPI_NATIVE_TYPE_INT64 -> getInt64 b <&> (JNumber . toRational)
+  DPI_NATIVE_TYPE_FLOAT -> getFloat b <&> (JNumber . toRational)
+  DPI_NATIVE_TYPE_DOUBLE -> getDouble b <&> (JNumber . toRational)
+  DPI_NATIVE_TYPE_BOOLEAN -> getBool b <&> JBool
+  DPI_NATIVE_TYPE_NULL -> return JNull
+  DPI_NATIVE_TYPE_JSON -> getJson b <&> dpiJsonNodeToJNode
+  DPI_NATIVE_TYPE_JSON_OBJECT -> getJsonObject <&> dpiJsonObjectToJNode
+  DPI_NATIVE_TYPE_JSON_ARRAY -> getJsonArray <&> dpiJsonArrayToJNode
+
+data JNode
+  = JString String
+  | JArray [JNode]
+  | JNumber Rational
+  | JObject [(String, JNode)]
+  | JBool Bool
+  | JNull
+
+instance Show JNode where
+  show (JString s) = "\\\"" ++ s ++ "\\\""
+  show (JBool b) = if b then "true" else "false"
+  show (JNumber n) = show n
+  show (JArray arr) =
+    L.concat
+      [ "[",
+        L.intercalate "," (L.map show arr),
+        "]"
+      ]
+  show (JObject obj) =
+    L.concat
+      [ "{",
+        L.intercalate "," (L.map (\(k, v) -> L.concat [k, ":", show v]) obj),
+        "}"
+      ]

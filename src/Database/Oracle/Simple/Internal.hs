@@ -858,10 +858,10 @@ data WriteBuffer
 
 data DpiJsonObject = DpiJsonObject
   { objNumFields :: CUInt,
-    objFieldNames :: Ptr (Ptr CString),
-    objFieldNamesLength :: Ptr CUInt,
+    objFieldNames :: Ptr CString,
+    objFieldNameLengths :: Ptr CUInt,
     objFields :: Ptr DpiJsonNode,
-    objFieldValues :: Ptr ReadBuffer
+    objFieldValues :: Ptr (DPIData ReadBuffer)
   }
   deriving (Show, Eq, Generic)
   deriving anyclass (GStorable)
@@ -869,15 +869,15 @@ data DpiJsonObject = DpiJsonObject
 data DpiJsonArray = DpiJsonArray
   { arrNumElements :: CInt,
     arrElements :: Ptr DpiJsonNode,
-    arrElementValues :: Ptr ReadBuffer
+    arrElementValues :: Ptr (DPIData ReadBuffer)
   }
   deriving (Show, Eq, Generic)
   deriving anyclass (GStorable)
 
 data DpiJsonNode = DpiJsonNode
-  { nodeOracleTypeNum :: DPIOracleType,
-    nodeNativeTypeNum :: DPINativeType,
-    nodeValue :: Ptr ReadBuffer
+  { nodeOracleTypeNum :: CUInt,
+    nodeNativeTypeNum :: CUInt,
+    nodeValue :: Ptr (DPIData ReadBuffer)
   }
   deriving (Show, Eq, Generic)
   deriving anyclass (GStorable)
@@ -987,28 +987,28 @@ isHealthy (Connection fptr) =
 -- Returns DPI_SUCCESS | DPI_FAILURE
 foreign import ccall unsafe "dpiJson_addRef"
   dpiJson_addRef ::
-    Ptr DpiJsonObject ->
+    Ptr DpiJsonNode ->
     CInt
 
 -- Ptr (Ptr DpiJsonNode) -> is an output pointer
 -- Returns DPI_SUCCESS | DPI_FAILURE
 foreign import ccall unsafe "dpiJson_getValue"
   dpiJson_getValue ::
-    Ptr DpiJsonObject ->
+    Ptr DpiJsonNode ->
     Ptr CInt ->
     Ptr (Ptr DpiJsonNode) ->
-    CInt
+    IO CInt
 
 -- Returns DPI_SUCCESS | DPI_FAILURE
 foreign import ccall unsafe "dpiJson_release"
   dpiJson_release ::
-    Ptr DpiJsonObject ->
+    Ptr DpiJsonNode ->
     CInt
 
 -- Returns DPI_SUCCESS | DPI_FAILURE
 foreign import ccall unsafe "dpiJson_setFromText"
   dpiJson_setFromText ::
-    Ptr DpiJsonObject ->
+    Ptr DpiJsonNode ->
     CString ->
     CULong ->
     CUInt ->
@@ -1017,6 +1017,44 @@ foreign import ccall unsafe "dpiJson_setFromText"
 -- Returns DPI_SUCCESS | DPI_FAILURE
 foreign import ccall unsafe "dpiJson_setValue"
   dpiJson_setValue ::
-    Ptr DpiJsonObject ->
+    Ptr DpiJsonNode ->
     Ptr DpiJsonNode ->
     CInt
+
+-- Json is always a json node, the type has to be inspected before it's known
+-- if it is a json object, array or scalar value.
+-- you can figure out what type of node a json node is by inspecting the
+-- native type field on it.
+foreign import ccall unsafe "dpiData_getJson"
+  dpiData_getJson ::
+    Ptr (DPIData ReadBuffer) ->
+    IO (Ptr DpiJsonNode)
+
+foreign import ccall unsafe "dpiData_getJsonArray"
+  dpiData_getJsonArray ::
+    Ptr (DPIData ReadBuffer) ->
+    IO (Ptr DpiJsonArray)
+
+foreign import ccall unsafe "dpiData_getJsonObject"
+  dpiData_getJsonObject ::
+    Ptr (DPIData ReadBuffer) ->
+    IO (Ptr DpiJsonObject)
+
+-- getDpiNode (DpiJsonNode _ nativeType val) = case nativeType of
+--   DPI_NATIVE_TYPE_INT64 -> dpiData_getInt64 val
+--   DPI_NATIVE_TYPE_UINT64 -> dpiData_getUint64 val
+--   DPI_NATIVE_TYPE_FLOAT ->
+--   DPI_NATIVE_TYPE_DOUBLE ->
+--   DPI_NATIVE_TYPE_BYTES ->
+--   DPI_NATIVE_TYPE_TIMESTAMP ->
+--   DPI_NATIVE_TYPE_INTERVAL_DS ->
+--   DPI_NATIVE_TYPE_INTERVAL_YM ->
+--   DPI_NATIVE_TYPE_LOB ->
+--   DPI_NATIVE_TYPE_OBJECT ->
+--   DPI_NATIVE_TYPE_STMT ->
+--   DPI_NATIVE_TYPE_BOOLEAN ->
+--   DPI_NATIVE_TYPE_ROWID ->
+--   DPI_NATIVE_TYPE_JSON ->
+--   DPI_NATIVE_TYPE_JSON_OBJECT ->
+--   DPI_NATIVE_TYPE_JSON_ARRAY ->
+--   DPI_NATIVE_TYPE_NULL ->

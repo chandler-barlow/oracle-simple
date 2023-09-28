@@ -30,6 +30,7 @@ import Data.IORef
 import Data.Kind
 import Data.List as L
 import Data.Text
+import Data.Time
 import Data.Typeable
 import Data.Word
 import Foreign
@@ -42,6 +43,7 @@ import Foreign.Storable.Generic
 import GHC.Generics
 import GHC.TypeLits
 import System.IO.Unsafe
+import Test.QuickCheck
 
 newtype DPIStmt = DPIStmt (Ptr DPIStmt)
   deriving (Show, Eq)
@@ -202,9 +204,15 @@ toDPIPurity :: DPIPurity -> CUInt
 toDPIPurity = fromIntegral . fromEnum
 
 data DPIModeConnClose
+<<<<<<< HEAD
   = DPI_MODE_CONN_CLOSE_DEFAULT --                0x0000
   | DPI_MODE_CONN_CLOSE_DROP --                0x0001
   | DPI_MODE_CONN_CLOSE_RETAG --                0x0002
+=======
+  = DPI_MODE_CONN_CLOSE_DEFAULT -- 0x0000
+  | DPI_MODE_CONN_CLOSE_DROP    -- 0x0001
+  | DPI_MODE_CONN_CLOSE_RETAG   -- 0x0002
+>>>>>>> master
   deriving (Show, Eq)
 
 toDpiModeConnClose :: DPIModeConnClose -> CUInt
@@ -546,6 +554,51 @@ data DPITimestamp = DPITimestamp
   }
   deriving (Show, Eq, Generic)
   deriving anyclass (GStorable)
+
+-- | Converts a DPITimestamp into the UTCTime zone by applying the offsets
+-- to the year, month, day, hour, minutes and seconds
+dpiTimeStampToUTCDPITimeStamp :: DPITimestamp -> DPITimestamp
+dpiTimeStampToUTCDPITimeStamp dpi@DPITimestamp{..} = utcDpi
+ where
+  offsetInMinutes, currentMinutes :: Int
+  offsetInMinutes = negate $ (fromIntegral tzHourOffset * 60) + fromIntegral tzMinuteOffset
+  currentMinutes = (fromIntegral hour * 60) + fromIntegral minute
+  (hours, minutes) = ((currentMinutes + offsetInMinutes) `mod` 1440) `quotRem` 60
+
+  gregorianDay = fromGregorian (fromIntegral year) (fromIntegral month) (fromIntegral day)
+  updatedDay
+    | fromIntegral currentMinutes + fromIntegral offsetInMinutes > 1440 =
+        addDays 1 gregorianDay
+    | fromIntegral currentMinutes + fromIntegral offsetInMinutes < 0 =
+        addDays (-1) gregorianDay
+    | otherwise = gregorianDay
+  (year', month', day') = toGregorian updatedDay
+  utcDpi =
+    dpi
+      { tzHourOffset = 0
+      , tzMinuteOffset = 0
+      , year = fromIntegral year'
+      , month = fromIntegral month'
+      , day = fromIntegral day'
+      , hour = fromIntegral hours
+      , minute = fromIntegral minutes
+      }
+
+instance Arbitrary DPITimestamp where
+  arbitrary = do
+    year <- choose (1000, 2023)
+    month <- choose (1, 12)
+    day <- choose (1, 28)
+    hour <- choose (1, 23)
+    minute <- choose (1, 59)
+    second <- choose (1, 59)
+    fsecond <- choose (0, 100000)
+    tzHourOffset <- choose (-14, 14)
+    tzMinuteOffset <-
+      if signum tzHourOffset < 0
+        then choose (-59, 0)
+        else choose (0, 59)
+    pure DPITimestamp{..}
 
 instance HasDPINativeType DPITimestamp where
   dpiNativeType Proxy = DPI_NATIVE_TYPE_TIMESTAMP
@@ -1040,21 +1093,7 @@ foreign import ccall unsafe "dpiData_getJsonObject"
     Ptr (DPIData ReadBuffer) ->
     IO (Ptr DpiJsonObject)
 
--- getDpiNode (DpiJsonNode _ nativeType val) = case nativeType of
---   DPI_NATIVE_TYPE_INT64 -> dpiData_getInt64 val
---   DPI_NATIVE_TYPE_UINT64 -> dpiData_getUint64 val
---   DPI_NATIVE_TYPE_FLOAT ->
---   DPI_NATIVE_TYPE_DOUBLE ->
---   DPI_NATIVE_TYPE_BYTES ->
---   DPI_NATIVE_TYPE_TIMESTAMP ->
---   DPI_NATIVE_TYPE_INTERVAL_DS ->
---   DPI_NATIVE_TYPE_INTERVAL_YM ->
---   DPI_NATIVE_TYPE_LOB ->
---   DPI_NATIVE_TYPE_OBJECT ->
---   DPI_NATIVE_TYPE_STMT ->
---   DPI_NATIVE_TYPE_BOOLEAN ->
---   DPI_NATIVE_TYPE_ROWID ->
---   DPI_NATIVE_TYPE_JSON ->
---   DPI_NATIVE_TYPE_JSON_OBJECT ->
---   DPI_NATIVE_TYPE_JSON_ARRAY ->
---   DPI_NATIVE_TYPE_NULL ->
+-- | The 1-tuple type or single-value "collection".
+-- Structurally equivalent to 'Data.Functor.Identity.Identity'.
+newtype Only a = Only {fromOnly :: a}
+  deriving stock (Eq, Ord, Read, Show, Generic)

@@ -9,8 +9,13 @@
 
 module Database.Oracle.Simple.FromField where
 
+import Control.Exception
 import Control.Monad
+<<<<<<< HEAD
 import qualified Data.ByteString.Char8 as B
+=======
+import qualified Data.ByteString as BS
+>>>>>>> master
 import Data.Coerce
 import Data.Fixed
 import Data.Functor ((<&>))
@@ -19,6 +24,7 @@ import qualified Data.List as L
 import Data.Maybe (fromMaybe)
 import Data.Proxy
 import Data.Text
+import Data.Text.Encoding
 import Data.Time
 import Data.Word
 import Database.Oracle.Simple.Internal
@@ -75,7 +81,7 @@ instance FromField UTCTime where
 
 dpiTimeStampToUTCTime :: DPITimestamp -> UTCTime
 dpiTimeStampToUTCTime dpi =
-  let DPITimestamp {..} = dpiTimeStampToUTCDPITimeStamp dpi
+  let DPITimestamp{..} = dpiTimeStampToUTCDPITimeStamp dpi
       local = LocalTime d tod
       d = fromGregorian (fromIntegral year) (fromIntegral month) (fromIntegral day)
       tod = TimeOfDay (fromIntegral hour) (fromIntegral minute) (fromIntegral second + picos)
@@ -125,22 +131,33 @@ getWord64 = dpiData_getUint64
 getBool :: ReadDPIBuffer Bool
 getBool ptr = (== 1) <$> dpiData_getBool ptr
 
--- | Get Text from the data buffer
+-- | Get Text from the data buffer.
+-- Supports ASCII, UTF-8 and UTF-16 big- and little-endian encodings.
+-- Throws 'FieldParseError' if any other encoding is encountered.
 getText :: ReadDPIBuffer Text
-getText = fmap pack <$> getString
+getText = buildText <=< peek <=< dpiData_getBytes
+ where
+  buildText DPIBytes{..} = do
+    gotBytes <- BS.packCStringLen (dpiBytesPtr, fromIntegral dpiBytesLength)
+    encoding <- peekCString dpiBytesEncoding
+    decodeFn <- case encoding of
+      "ASCII" -> pure decodeASCII
+      "UTF-8" -> pure decodeUtf8
+      "UTF-16BE" -> pure decodeUtf16BE
+      "UTF-16LE" -> pure decodeUtf16LE
+      otherEnc -> throwIO $ UnsupportedEncoding otherEnc
+    evaluate (decodeFn gotBytes)
+      `catch` ( \(e :: SomeException) -> throwIO (ByteDecodeError encoding (displayException e))
+              )
 
--- | Get String from the data buffer
+-- | Get Text from the data buffer
 getString :: ReadDPIBuffer String
-getString = buildString <=< peek <=< dpiData_getBytes
-  where
-    buildString DPIBytes {..} =
-      peekCStringLen (dpiBytesPtr, fromIntegral dpiBytesLength)
+getString = fmap unpack <$> getText
 
 -- | Get a `DPITimestamp` from the buffer
 getTimestamp :: ReadDPIBuffer DPITimestamp
 getTimestamp = peek <=< dpiData_getTimestamp
 
----- Json Stuff ----
 -- The main function for dealing with json
 getJson :: ReadDPIBuffer DpiJsonNode
 getJson = peek <=< dpiData_getJson
@@ -222,3 +239,18 @@ instance Show JNode where
         L.intercalate "," (L.map (\(k, v) -> L.concat [k, ":", show v]) obj),
         "}"
       ]
+-- | Errors encountered when parsing a database field.
+data FieldParseError
+  = -- | We encountered an encoding other than ASCII, UTF-8 or UTF-16
+    UnsupportedEncoding {fpeOtherEncoding :: String}
+  | -- | Failed to decode bytes using stated encoding
+    ByteDecodeError {fpeEncoding :: String, fpeErrorMsg :: String}
+  deriving (Show)
+
+instance Exception FieldParseError where
+  displayException UnsupportedEncoding{..} =
+    "Field Parse Error: Encountered unsupported text encoding '"
+      <> fpeOtherEncoding
+      <> "'. Supported encodings: ASCII, UTF-8, UTF-16BE, UTF-16LE."
+  displayException ByteDecodeError{..} =
+    "Field Parse Error: Failed to decode bytes as " <> fpeEncoding <> ": " <> fpeErrorMsg

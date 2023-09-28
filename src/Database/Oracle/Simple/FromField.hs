@@ -165,7 +165,7 @@ instance FromField DpiJsonArray where
 instance FromField JsonByteString where
   fromField = B.pack . show . dpiJsonNodeToJNode <$> FieldParser getJson
 
-type JsonByteString = ByteString
+type JsonByteString = B.ByteString
 
 -- Defaults to a null value for unparseble json types
 -- may not be good behaviour

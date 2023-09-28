@@ -7,4 +7,5 @@ let
 in
   import nixpkgs
     { config.allowUnfree = true;
+      localSystem = "x86_64-darwin";
     }

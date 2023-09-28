@@ -1,4 +1,6 @@
-{ pkgs ? import ./nix
+{
+  pkgs ? import ./nix, 
+  pkgs_x86_64 ? import <nixpkgs> { localSystem = "x86_64-darwin"; },
 }:
 with pkgs.haskell.lib;
 let
@@ -14,7 +16,7 @@ let
   };
   hPkgs = pkgs.haskell.packages.ghc961.override { inherit overrides; };
   src = ./.;
-  oracle-simple = hPkgs.callCabal2nix "oracle-simple" src { inherit (pkgs) odpic; };
+  oracle-simple = hPkgs.callCabal2nix "oracle-simple" src { inherit (pkgs) odpic;};
 in
 {
   oracle-simple = appendConfigureFlags (disableCabalFlag oracle-simple "default_paths")

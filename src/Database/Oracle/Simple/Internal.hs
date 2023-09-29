@@ -25,6 +25,7 @@ module Database.Oracle.Simple.Internal where
 import Control.Exception
 import Control.Monad
 import Control.Monad.State.Strict
+import qualified Data.ByteString.Char8 as B
 import Data.Coerce
 import Data.IORef
 import Data.Kind
@@ -204,15 +205,9 @@ toDPIPurity :: DPIPurity -> CUInt
 toDPIPurity = fromIntegral . fromEnum
 
 data DPIModeConnClose
-<<<<<<< HEAD
-  = DPI_MODE_CONN_CLOSE_DEFAULT --                0x0000
-  | DPI_MODE_CONN_CLOSE_DROP --                0x0001
-  | DPI_MODE_CONN_CLOSE_RETAG --                0x0002
-=======
   = DPI_MODE_CONN_CLOSE_DEFAULT -- 0x0000
-  | DPI_MODE_CONN_CLOSE_DROP    -- 0x0001
-  | DPI_MODE_CONN_CLOSE_RETAG   -- 0x0002
->>>>>>> master
+  | DPI_MODE_CONN_CLOSE_DROP -- 0x0001
+  | DPI_MODE_CONN_CLOSE_RETAG -- 0x0002
   deriving (Show, Eq)
 
 toDpiModeConnClose :: DPIModeConnClose -> CUInt
@@ -558,31 +553,31 @@ data DPITimestamp = DPITimestamp
 -- | Converts a DPITimestamp into the UTCTime zone by applying the offsets
 -- to the year, month, day, hour, minutes and seconds
 dpiTimeStampToUTCDPITimeStamp :: DPITimestamp -> DPITimestamp
-dpiTimeStampToUTCDPITimeStamp dpi@DPITimestamp{..} = utcDpi
- where
-  offsetInMinutes, currentMinutes :: Int
-  offsetInMinutes = negate $ (fromIntegral tzHourOffset * 60) + fromIntegral tzMinuteOffset
-  currentMinutes = (fromIntegral hour * 60) + fromIntegral minute
-  (hours, minutes) = ((currentMinutes + offsetInMinutes) `mod` 1440) `quotRem` 60
+dpiTimeStampToUTCDPITimeStamp dpi@DPITimestamp {..} = utcDpi
+  where
+    offsetInMinutes, currentMinutes :: Int
+    offsetInMinutes = negate $ (fromIntegral tzHourOffset * 60) + fromIntegral tzMinuteOffset
+    currentMinutes = (fromIntegral hour * 60) + fromIntegral minute
+    (hours, minutes) = ((currentMinutes + offsetInMinutes) `mod` 1440) `quotRem` 60
 
-  gregorianDay = fromGregorian (fromIntegral year) (fromIntegral month) (fromIntegral day)
-  updatedDay
-    | fromIntegral currentMinutes + fromIntegral offsetInMinutes > 1440 =
-        addDays 1 gregorianDay
-    | fromIntegral currentMinutes + fromIntegral offsetInMinutes < 0 =
-        addDays (-1) gregorianDay
-    | otherwise = gregorianDay
-  (year', month', day') = toGregorian updatedDay
-  utcDpi =
-    dpi
-      { tzHourOffset = 0
-      , tzMinuteOffset = 0
-      , year = fromIntegral year'
-      , month = fromIntegral month'
-      , day = fromIntegral day'
-      , hour = fromIntegral hours
-      , minute = fromIntegral minutes
-      }
+    gregorianDay = fromGregorian (fromIntegral year) (fromIntegral month) (fromIntegral day)
+    updatedDay
+      | fromIntegral currentMinutes + fromIntegral offsetInMinutes > 1440 =
+          addDays 1 gregorianDay
+      | fromIntegral currentMinutes + fromIntegral offsetInMinutes < 0 =
+          addDays (-1) gregorianDay
+      | otherwise = gregorianDay
+    (year', month', day') = toGregorian updatedDay
+    utcDpi =
+      dpi
+        { tzHourOffset = 0,
+          tzMinuteOffset = 0,
+          year = fromIntegral year',
+          month = fromIntegral month',
+          day = fromIntegral day',
+          hour = fromIntegral hours,
+          minute = fromIntegral minutes
+        }
 
 instance Arbitrary DPITimestamp where
   arbitrary = do
@@ -598,7 +593,7 @@ instance Arbitrary DPITimestamp where
       if signum tzHourOffset < 0
         then choose (-59, 0)
         else choose (0, 59)
-    pure DPITimestamp{..}
+    pure DPITimestamp {..}
 
 instance HasDPINativeType DPITimestamp where
   dpiNativeType Proxy = DPI_NATIVE_TYPE_TIMESTAMP
@@ -780,6 +775,21 @@ instance (HasDPINativeType a) => HasDPINativeType (Maybe a) where
 instance HasDPINativeType Int where
   dpiNativeType Proxy = dpiNativeType (Proxy @Int64)
 
+instance HasDPINativeType UTCTime where
+  dpiNativeType Proxy = DPI_NATIVE_TYPE_TIMESTAMP
+
+instance HasDPINativeType JsonByteString where
+  dpiNativeType Proxy = DPI_NATIVE_TYPE_JSON
+
+instance HasDPINativeType DpiJsonNode where
+  dpiNativeType Proxy = DPI_NATIVE_TYPE_JSON
+
+instance HasDPINativeType DpiJsonObject where
+  dpiNativeType Proxy = DPI_NATIVE_TYPE_JSON_OBJECT
+
+instance HasDPINativeType DpiJsonArray where
+  dpiNativeType Proxy = DPI_NATIVE_TYPE_JSON_ARRAY
+
 data DPINativeType
   = DPI_NATIVE_TYPE_INT64
   | DPI_NATIVE_TYPE_UINT64
@@ -833,6 +843,8 @@ data DPIOracleType
   | DPI_ORACLE_TYPE_UROWID
   | DPI_ORACLE_TYPE_VARCHAR
   deriving (Show, Eq)
+
+type JsonByteString = B.ByteString
 
 dpiNativeTypeToUInt :: DPINativeType -> CUInt
 dpiNativeTypeToUInt DPI_NATIVE_TYPE_INT64 = 3000

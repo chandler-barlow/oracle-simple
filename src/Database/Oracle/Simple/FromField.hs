@@ -11,11 +11,8 @@ module Database.Oracle.Simple.FromField where
 
 import Control.Exception
 import Control.Monad
-<<<<<<< HEAD
-import qualified Data.ByteString.Char8 as B
-=======
 import qualified Data.ByteString as BS
->>>>>>> master
+import qualified Data.ByteString.Char8 as B
 import Data.Coerce
 import Data.Fixed
 import Data.Functor ((<&>))
@@ -81,7 +78,7 @@ instance FromField UTCTime where
 
 dpiTimeStampToUTCTime :: DPITimestamp -> UTCTime
 dpiTimeStampToUTCTime dpi =
-  let DPITimestamp{..} = dpiTimeStampToUTCDPITimeStamp dpi
+  let DPITimestamp {..} = dpiTimeStampToUTCDPITimeStamp dpi
       local = LocalTime d tod
       d = fromGregorian (fromIntegral year) (fromIntegral month) (fromIntegral day)
       tod = TimeOfDay (fromIntegral hour) (fromIntegral minute) (fromIntegral second + picos)
@@ -136,19 +133,19 @@ getBool ptr = (== 1) <$> dpiData_getBool ptr
 -- Throws 'FieldParseError' if any other encoding is encountered.
 getText :: ReadDPIBuffer Text
 getText = buildText <=< peek <=< dpiData_getBytes
- where
-  buildText DPIBytes{..} = do
-    gotBytes <- BS.packCStringLen (dpiBytesPtr, fromIntegral dpiBytesLength)
-    encoding <- peekCString dpiBytesEncoding
-    decodeFn <- case encoding of
-      "ASCII" -> pure decodeASCII
-      "UTF-8" -> pure decodeUtf8
-      "UTF-16BE" -> pure decodeUtf16BE
-      "UTF-16LE" -> pure decodeUtf16LE
-      otherEnc -> throwIO $ UnsupportedEncoding otherEnc
-    evaluate (decodeFn gotBytes)
-      `catch` ( \(e :: SomeException) -> throwIO (ByteDecodeError encoding (displayException e))
-              )
+  where
+    buildText DPIBytes {..} = do
+      gotBytes <- BS.packCStringLen (dpiBytesPtr, fromIntegral dpiBytesLength)
+      encoding <- peekCString dpiBytesEncoding
+      decodeFn <- case encoding of
+        "ASCII" -> pure decodeASCII
+        "UTF-8" -> pure decodeUtf8
+        "UTF-16BE" -> pure decodeUtf16BE
+        "UTF-16LE" -> pure decodeUtf16LE
+        otherEnc -> throwIO $ UnsupportedEncoding otherEnc
+      evaluate (decodeFn gotBytes)
+        `catch` ( \(e :: SomeException) -> throwIO (ByteDecodeError encoding (displayException e))
+                )
 
 -- | Get Text from the data buffer
 getString :: ReadDPIBuffer String
@@ -180,9 +177,10 @@ instance FromField DpiJsonArray where
   fromField = FieldParser getJsonArray
 
 instance FromField JsonByteString where
-  fromField = B.pack . show . dpiJsonNodeToJNode <$> FieldParser getJson
-
-type JsonByteString = B.ByteString
+  fromField = FieldParser (getJson >=> dpiJsonNodeToJNode >=> toBs)
+    where
+      toBs :: (Show a) => a -> IO B.ByteString
+      toBs = return . B.pack . show
 
 -- Defaults to a null value for unparseble json types
 -- may not be good behaviour
@@ -211,9 +209,9 @@ toJNode ntype b = case ntype of
   DPI_NATIVE_TYPE_DOUBLE -> getDouble b <&> (JNumber . toRational)
   DPI_NATIVE_TYPE_BOOLEAN -> getBool b <&> JBool
   DPI_NATIVE_TYPE_NULL -> return JNull
-  DPI_NATIVE_TYPE_JSON -> getJson b <&> dpiJsonNodeToJNode
-  DPI_NATIVE_TYPE_JSON_OBJECT -> getJsonObject <&> dpiJsonObjectToJNode
-  DPI_NATIVE_TYPE_JSON_ARRAY -> getJsonArray <&> dpiJsonArrayToJNode
+  DPI_NATIVE_TYPE_JSON -> getJson b >>= dpiJsonNodeToJNode
+  DPI_NATIVE_TYPE_JSON_OBJECT -> getJsonObject b >>= dpiJsonObjectToJNode
+  DPI_NATIVE_TYPE_JSON_ARRAY -> getJsonArray b >>= dpiJsonArrayToJNode
 
 data JNode
   = JString String
@@ -239,6 +237,7 @@ instance Show JNode where
         L.intercalate "," (L.map (\(k, v) -> L.concat [k, ":", show v]) obj),
         "}"
       ]
+
 -- | Errors encountered when parsing a database field.
 data FieldParseError
   = -- | We encountered an encoding other than ASCII, UTF-8 or UTF-16
@@ -248,9 +247,9 @@ data FieldParseError
   deriving (Show)
 
 instance Exception FieldParseError where
-  displayException UnsupportedEncoding{..} =
+  displayException UnsupportedEncoding {..} =
     "Field Parse Error: Encountered unsupported text encoding '"
       <> fpeOtherEncoding
       <> "'. Supported encodings: ASCII, UTF-8, UTF-16BE, UTF-16LE."
-  displayException ByteDecodeError{..} =
+  displayException ByteDecodeError {..} =
     "Field Parse Error: Failed to decode bytes as " <> fpeEncoding <> ": " <> fpeErrorMsg
